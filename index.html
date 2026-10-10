@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>เกม AR Sort: มาตราตัวสะกด</title>
+    <!-- โหลด Fonts จาก Google -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&family=Mali:wght@500;700&display=swap" rel="stylesheet">
+    
+    <!-- โหลด MediaPipe สำหรับ AR Pose Tracking -->
+    <!-- STREAMING_CHUNK:Loading MediaPipe libraries... -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* STREAMING_CHUNK:Setting up base CSS and Theme... */
+        :root {
+            --primary: #0077b6;
+            --secondary: #00b4d8;
+            --accent: #90e0ef;
+            --bg-top: #03045e;
+            --bg-bottom: #0077b6;
+            --correct: #2a9d8f;
+            --incorrect: #e76f51;
+            --text-main: #ffffff;
+            --font-head: 'Mali', cursive;
+            --font-body: 'Kanit', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: linear-gradient(to bottom, var(--bg-top), var(--bg-bottom));
+            color: var(--text-main);
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        /* ธีมใต้ทะเล: ฟองอากาศ */
+        .bubbles {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+        }
+        .bubble {
+            position: absolute;
+            bottom: -20px;
+            background: rgba(255, 255, 255, 0.4);
+            border-radius: 50%;
+            animation: rise infinite ease-in;
+        }
+        @keyframes rise {
+            0% { transform: translateY(0) scale(1); opacity: 0; }
+            10% { opacity: 1; }
+            100% { transform: translateY(-110vh) scale(1.5); opacity: 0; }
+        }
+
+        /* พื้นหลังโหมดกล้อง AR */
+        #camera-container {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            display: none;
+        }
+        #webcam {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* กลับด้านเป็นกระจกเงา */
+        }
+        .camera-overlay {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(to bottom, rgba(3,4,94,0.7) 0%, rgba(3,4,94,0.2) 30%, rgba(3,4,94,0.2) 70%, rgba(0,119,182,0.8) 100%);
+        }
+
+        /* เส้นแกนผู้เล่น */
+        #player-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 6px;
+            background: rgba(255, 255, 255, 0.6);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.8);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            border-radius: 3px;
+            transition: opacity 0.3s;
+            display: none;
+        }
+        #player-avatar {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 3rem;
+            text-shadow: 0 0 10px rgba(0,0,0,0.5);
+            z-index: 11;
+        }
+
+        /* โครงสร้าง UI หลัก */
+        .ui-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* หน้าจอต่างๆ */
+        .screen {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            width: 100%;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 40, 80, 0.6);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .screen.active { display: flex; }
+
+        /* HUD */
+        .hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 1.2rem;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);
+            z-index: 30;
+            display: none;
+        }
+
+        /* พื้นที่เล่นเกม (โซนซ้ายขวา) */
+        #game-area {
+            position: absolute;
+            inset: 0;
+            display: none;
+            z-index: 15;
+        }
+        .zone {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 35%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-head);
+            font-size: 2rem;
+            font-weight: bold;
+            opacity: 0.3;
+            transition: opacity 0.3s, background 0.3s;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            border-radius: 20px;
+            margin: 10px;
+        }
+        #zone-left {
+            left: 0;
+            background: linear-gradient(to right, rgba(0, 180, 216, 0.6), transparent);
+            border-left: 5px solid var(--secondary);
+        }
+        #zone-right {
+            right: 0;
+            background: linear-gradient(to left, rgba(144, 224, 239, 0.6), transparent);
+            border-right: 5px solid var(--accent);
+        }
+        .zone.active {
+            opacity: 0.8;
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: inset 0 0 50px rgba(255, 255, 255, 0.3);
+        }
+
+        /* บัตรคำ */
+        .card-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            z-index: 25;
+            background: rgba(255, 255, 255, 0.95);
+            color: #03045e;
+            padding: 30px 50px;
+            border-radius: 30px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.3), inset 0 0 0 5px var(--accent);
+            text-align: center;
+            max-width: 90%;
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes popIn {
+            0% { transform: translate(-50%, -30%) scale(0.5); opacity: 0; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        }
+        .card-icon { font-size: 4rem; margin-bottom: 10px; }
+        .card-word { font-family: var(--font-head); font-size: 3rem; font-weight: bold; margin-bottom: 10px; }
+        
+        /* Dwell Progress Bar */
+        .progress-ring-container {
+            position: absolute;
+            bottom: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            display: none;
+            z-index: 30;
+        }
+        .progress-bar-bg {
+            width: 200px;
+            height: 20px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid white;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: #ffd166;
+            transition: width 0.1s linear;
+        }
+
+        /* ข้อความแจ้งเตือน (กลับตรงกลาง) */
+        .center-prompt {
+            position: absolute;
+            top: 30%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 2rem;
+            font-family: var(--font-head);
+            color: #ffd166;
+            text-shadow: 2px 2px 10px rgba(0,0,0,0.8);
+            z-index: 40;
+            display: none;
+            animation: pulse 1s infinite;
+            text-align: center;
+            background: rgba(0,0,0,0.4);
+            padding: 10px 20px;
+            border-radius: 15px;
+        }
+        @keyframes pulse {
+            0% { transform: translateX(-50%) scale(1); }
+            50% { transform: translateX(-50%) scale(1.1); }
+            100% { transform: translateX(-50%) scale(1); }
+        }
+
+        /* Feedback Text */
+        .feedback-text {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 4rem;
+            font-family: var(--font-head);
+            font-weight: bold;
+            z-index: 50;
+            display: none;
+            text-shadow: 3px 3px 15px rgba(0,0,0,0.6);
+        }
+        .feedback-correct { color: #06d6a0; }
+        .feedback-incorrect { color: #ef476f; }
+        .feedback-desc {
+            font-size: 1.5rem;
+            color: white;
+            margin-top: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 15px;
+            border-radius: 10px;
+        }
+
+        /* ปุ่มต่างๆ */
+        .btn {
+            background: linear-gradient(135deg, #48cae4, #0077b6);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            font-family: var(--font-head);
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3), inset 0 -3px 0 rgba(0,0,0,0.2);
+            transition: transform 0.1s, box-shadow 0.1s;
+            margin: 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .btn:active {
+            transform: translateY(3px);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3), inset 0 -1px 0 rgba(0,0,0,0.2);
+        }
+        .btn-alt {
+            background: linear-gradient(135deg, #ffb703, #fb8500);
+        }
+
+        h1 { font-family: var(--font-head); font-size: 4rem; margin-bottom: 10px; color: #caf0f8; text-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+        h2 { font-family: var(--font-head); font-size: 2.5rem; margin-bottom: 20px; color: #90e0ef; }
+        p { font-size: 1.2rem; margin-bottom: 20px; max-width: 600px; line-height: 1.6; }
+
+        .mascot-lg { font-size: 6rem; margin-bottom: 20px; filter: drop-shadow(0 10px 10px rgba(0,0,0,0.3)); animation: float 3s ease-in-out infinite; }
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-20px); }
+        }
+
+        /* Utilities */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- STREAMING_CHUNK:Background Elements -->
+    <div class="bubbles" id="bubbles-container"></div>
+
+    <div id="camera-container">
+        <video id="webcam" autoplay playsinline></video>
+        <div class="camera-overlay"></div>
+    </div>
+
+    <!-- Gameplay Overlay -->
+    <div id="player-line"><div id="player-avatar">🐳</div></div>
+    
+    <div id="game-area">
+        <div id="zone-left" class="zone">👈<br>มาตราตรงแม่</div>
+        <div id="zone-right" class="zone">มาตราไม่ตรงแม่<br>👉</div>
+    </div>
+
+    <div class="card-container" id="question-card">
+        <div class="card-icon" id="card-icon"></div>
+        <div class="card-word" id="card-word"></div>
+        <div style="font-size: 1.2rem; color: #666;">(ขยับตัวเพื่อเลือกคำตอบ)</div>
+    </div>
+
+    <div class="progress-ring-container" id="dwell-progress">
+        <div style="margin-bottom: 5px; font-weight: bold; text-shadow: 1px 1px 2px black;">กำลังยืนยัน...</div>
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="dwell-fill"></div></div>
+    </div>
+
+    <div class="center-prompt" id="center-prompt">
+        ⚠️ กลับมายืนตรงกลางก่อนนะจ๊ะ ⚠️
+    </div>
+
+    <div class="feedback-text" id="feedback-display">
+        <div id="feedback-main"></div>
+        <div id="feedback-desc" class="feedback-desc"></div>
+    </div>
+
+    <!-- STREAMING_CHUNK:UI Screens -->
+    <div class="hud" id="hud">
+        <div>ข้อ: <span id="hud-q">1/20</span></div>
+        <div style="flex-grow: 1; margin: 0 20px;">
+            <div style="height: 10px; background: rgba(0,0,0,0.5); border-radius: 5px; overflow: hidden;">
+                <div id="hud-progress" style="height: 100%; width: 0%; background: #90e0ef;"></div>
+            </div>
+        </div>
+        <div>⏱️ <span id="hud-time">00:00</span> | ⭐️ <span id="hud-score">0</span></div>
+        <button onclick="endGame()" style="margin-left:15px; padding: 5px 10px; border-radius:10px; background: #e76f51; color:white; border:none; cursor:pointer;">ออก</button>
+    </div>
+
+    <div class="ui-layer">
+        <!-- หน้าแรก -->
+        <div class="screen active" id="screen-start">
+            <div class="mascot-lg">🐳</div>
+            <h1>เกม AR Sort: มาตราตัวสะกด</h1>
+            <h2>กลุ่มสาระภาษาไทย ป.4 - ป.6</h2>
+            <div class="glass-panel">
+                <p><strong>วิธีเล่น:</strong> จะมีบัตรคำลอยขึ้นมาตรงกลางหน้าจอ ให้ตัดสินใจว่าคำนั้นอยู่ใน <strong>"มาตราตรงแม่"</strong> หรือ <strong>"มาตราไม่ตรงแม่"</strong><br>
+                ให้ขยับตัว (หรือเมาส์) ไปทางซ้าย/ขวา แล้วค้างไว้สักครู่เพื่อยืนยันคำตอบ</p>
+                <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+                    <button class="btn" onclick="startGame('ar')">📹 เล่นด้วยกล้อง (ขยับตัว)</button>
+                    <button class="btn btn-alt" onclick="startGame('mouse')">🖱️ เล่นด้วยเมาส์ / นิ้ว</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- หน้าจบเกม -->
+        <div class="screen" id="screen-end">
+            <div class="mascot-lg" id="end-mascot">🏆</div>
+            <h1 id="end-title">สรุปผลงาน</h1>
+            <div class="glass-panel" style="font-size: 1.5rem;">
+                <p>คะแนนที่ได้: <strong style="font-size: 3rem; color: #ffd166;" id="end-score">0/20</strong></p>
+                <p>เวลาที่ใช้: <span id="end-time">00:00</span> นาที</p>
+                <p id="end-praise" style="color: #90e0ef; font-weight: bold; font-size: 1.8rem; margin-top: 10px;"></p>
+                <br>
+                <button class="btn" onclick="resetGame()">🔄 เล่นอีกครั้ง</button>
+                <button class="btn btn-alt" onclick="location.reload()">🏠 กลับหน้าแรก</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- STREAMING_CHUNK:Game Logic and Data... -->
+    <script>
+        /**
+         * ==========================================
+         * ตัวแปรตั้งค่า (Configuration Variables)
+         * สำหรับคุณครูปรับแก้ไขได้ตามต้องการ
+         * ==========================================
+         */
+        
+        // จำนวนข้อที่ต้องการให้เล่นใน 1 รอบ
+        const TOTAL_QUESTIONS = 20; 
+        
+        // เวลาที่ต้องค้างอยู่ในโซนเพื่อยืนยันคำตอบ (มิลลิวินาที)
+        const DWELL_MS = 900; 
+
+        // เกณฑ์ความกว้างของโซน (0.0 = ซ้ายสุด, 1.0 = ขวาสุด)
+        const LEFT_THRESHOLD = 0.35;
+        const RIGHT_THRESHOLD = 0.65;
+        
+        // เกณฑ์พื้นที่ตรงกลางที่ถือว่าผู้เล่นกลับมาแล้ว
+        const CENTER_MIN = 0.40;
+        const CENTER_MAX = 0.60;
+        
+        // ความหนืดของการเคลื่อนที่ (0.01 = หนืดมาก, 1.0 = ตามติดทันที)
+        const SMOOTHING = 0.15; 
+
+        // คลังข้อสอบ (อย่างน้อย 40 ข้อ)
+        // zone: "left" = มาตราตรงแม่, "right" = มาตราไม่ตรงแม่
+        const WORDS = [
+            // --- มาตราตรงแม่ ---
+            { word: "กางเกง", icon: "👖", zone: "left", desc: "แม่ กง (ง.งู สะกดตรงแม่)" },
+            { word: "แมว", icon: "🐈", zone: "left", desc: "แม่ เกอว (ว.แหวน สะกดตรงแม่)" },
+            { word: "ช้าง", icon: "🐘", zone: "left", desc: "แม่ กง (ง.งู สะกดตรงแม่)" },
+            { word: "ลม", icon: "💨", zone: "left", desc: "แม่ กม (ม.ม้า สะกดตรงแม่)" },
+            { word: "ยาย", icon: "👵", zone: "left", desc: "แม่ เกย (ย.ยักษ์ สะกดตรงแม่)" },
+            { word: "กบ", icon: "🐸", zone: "left", desc: "แม่ กบ (บ.ใบไม้ สะกดตรงแม่)" },
+            { word: "นก", icon: "🐦", zone: "left", desc: "แม่ กก (ก.ไก่ สะกดตรงแม่)" },
+            { word: "เป็ด", icon: "🦆", zone: "left", desc: "แม่ กด (ด.เด็ก สะกดตรงแม่)" },
+            { word: "จาน", icon: "🍽️", zone: "left", desc: "แม่ กน (น.หนู สะกดตรงแม่)" },
+            { word: "ดาว", icon: "⭐", zone: "left", desc: "แม่ เกอว (ว.แหวน สะกดตรงแม่)" },
+            { word: "ส้ม", icon: "🍊", zone: "left", desc: "แม่ กม (ม.ม้า สะกดตรงแม่)" },
+            { word: "เตียง", icon: "🛏️", zone: "left", desc: "แม่ กง (ง.งู สะกดตรงแม่)" },
+            { word: "นิ้ว", icon: "👆", zone: "left", desc: "แม่ เกอว (ว.แหวน สะกดตรงแม่)" },
+            { word: "หอย", icon: "🐚", zone: "left", desc: "แม่ เกย (ย.ยักษ์ สะกดตรงแม่)" },
+            { word: "ร่ม", icon: "☂️", zone: "left", desc: "แม่ กม (ม.ม้า สะกดตรงแม่)" },
+            { word: "ปาก", icon: "👄", zone: "left", desc: "แม่ กก (ก.ไก่ สะกดตรงแม่)" },
+            { word: "มีด", icon: "🔪", zone: "left", desc: "แม่ กด (ด.เด็ก สะกดตรงแม่)" },
+            { word: "ดาบ", icon: "🗡️", zone: "left", desc: "แม่ กบ (บ.ใบไม้ สะกดตรงแม่)" },
+            { word: "แขน", icon: "💪", zone: "left", desc: "แม่ กน (น.หนู สะกดตรงแม่)" },
+            { word: "วิ่ง", icon: "🏃", zone: "left", desc: "แม่ กง (ง.งู สะกดตรงแม่)" },
+
+            // --- มาตราไม่ตรงแม่ ---
+            { word: "สุนัข", icon: "🐕", zone: "right", desc: "แม่ กก (ข.ไข่ สะกด)" },
+            { word: "เมฆ", icon: "☁️", zone: "right", desc: "แม่ กก (ฆ.ระฆัง สะกด)" },
+            { word: "วิหค", icon: "🕊️", zone: "right", desc: "แม่ กก (ค.ควาย สะกด)" },
+            { word: "สมเด็จ", icon: "👑", zone: "right", desc: "แม่ กด (จ.จาน สะกด)" },
+            { word: "ตำรวจ", icon: "👮", zone: "right", desc: "แม่ กด (จ.จาน สะกด)" },
+            { word: "ก๊าซ", icon: "⛽", zone: "right", desc: "แม่ กด (ซ.โซ่ สะกด)" },
+            { word: "กฎหมาย", icon: "⚖️", zone: "right", desc: "แม่ กด (ฎ.ชฎา สะกด)" },
+            { word: "ปรากฏ", icon: "✨", zone: "right", desc: "แม่ กด (ฏ.ปฏัก สะกด)" },
+            { word: "รัฐ", icon: "🏛️", zone: "right", desc: "แม่ กด (ฐ.ฐาน สะกด)" },
+            { word: "สัตว์", icon: "🐾", zone: "right", desc: "แม่ กด (ต.เต่า สะกด)" },
+            { word: "รถ", icon: "🚗", zone: "right", desc: "แม่ กด (ถ.ถุง สะกด)" },
+            { word: "พุธ", icon: "📅", zone: "right", desc: "แม่ กด (ธ.ธง สะกด)" },
+            { word: "อากาศ", icon: "🌬️", zone: "right", desc: "แม่ กด (ศ.ศาลา สะกด)" },
+            { word: "โอกาส", icon: "🚪", zone: "right", desc: "แม่ กด (ส.เสือ สะกด)" },
+            { word: "รูป", icon: "🖼️", zone: "right", desc: "แม่ กบ (ป.ปลา สะกด)" },
+            { word: "ยีราฟ", icon: "🦒", zone: "right", desc: "แม่ กบ (ฟ.ฟัน สะกด)" },
+            { word: "ลาภ", icon: "💰", zone: "right", desc: "แม่ กบ (ภ.สำเภา สะกด)" },
+            { word: "ทหาร", icon: "🪖", zone: "right", desc: "แม่ กน (ร.เรือ สะกด)" },
+            { word: "กุญแจ", icon: "🔑", zone: "right", desc: "แม่ กน (ญ.หญิง สะกด)" },
+            { word: "พยาบาล", icon: "🏥", zone: "right", desc: "แม่ กน (ล.ลิง สะกด)" }
+        ];
+
+        /* ==========================================
+         * ระบบควบคุมเกม (Game Engine)
+         * ========================================== */
+        let gameState = "START"; // START, WAIT_CENTER, PLAYING, DWELLING, FEEDBACK, END
+        let currentMode = "mouse";
+        let targetX = 0.5;
+        let playerX = 0.5; // ตำแหน่งปัจจุบัน 0.0 - 1.0 (จากซ้ายไปขวา)
+        
+        let questionList = [];
+        let currentQuestionIndex = 0;
+        let currentItem = null;
+        let score = 0;
+        let startTime = 0;
+        let timerInterval;
+
+        let dwellStartTime = 0;
+        let currentZone = null;
+
+        // ระบบเสียง (Web Audio API)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            if (type === 'select') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'correct') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(440, audioCtx.currentTime); // A4
+                osc.frequency.setValueAtTime(554.37, audioCtx.currentTime + 0.1); // C#5
+                osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.2); // E5
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.5);
+            } else if (type === 'incorrect') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.3);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            }
+        }
+
+        // STREAMING_CHUNK:Initialization and Setup
+        function createBubbles() {
+            const container = document.getElementById('bubbles-container');
+            container.innerHTML = '';
+            for(let i=0; i<15; i++) {
+                let bubble = document.createElement('div');
+                bubble.className = 'bubble';
+                let size = Math.random() * 30 + 10;
+                bubble.style.width = size + 'px';
+                bubble.style.height = size + 'px';
+                bubble.style.left = Math.random() * 100 + 'vw';
+                bubble.style.animationDuration = (Math.random() * 3 + 4) + 's';
+                bubble.style.animationDelay = (Math.random() * 5) + 's';
+                container.appendChild(bubble);
+            }
+        }
+
+        function shuffle(array) {
+            let currentIndex = array.length, randomIndex;
+            while (currentIndex != 0) {
+                randomIndex = Math.floor(Math.random() * currentIndex);
+                currentIndex--;
+                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+            }
+            return array;
+        }
+
+        async function startGame(mode) {
+            playSound('select');
+            currentMode = mode;
+            document.getElementById('screen-start').classList.remove('active');
+            
+            // เตรียมคำถาม
+            questionList = shuffle([...WORDS]).slice(0, TOTAL_QUESTIONS);
+            currentQuestionIndex = 0;
+            score = 0;
+            updateHUD();
+
+            if (mode === 'ar') {
+                const ready = await initAR();
+                if(!ready) {
+                    alert("ไม่สามารถเปิดกล้องได้ สลับไปใช้โหมดเมาส์แทน");
+                    currentMode = 'mouse';
+                }
+            }
+            
+            if (currentMode === 'mouse') {
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('touchmove', handleTouchMove, {passive: false});
+            }
+
+            document.getElementById('hud').style.display = 'flex';
+            document.getElementById('game-area').style.display = 'block';
+            document.getElementById('player-line').style.display = 'block';
+            
+            startTime = Date.now();
+            timerInterval = setInterval(updateTimer, 1000);
+            
+            createBubbles();
+            gameState = "WAIT_CENTER";
+            document.getElementById('center-prompt').style.display = 'block';
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // STREAMING_CHUNK:MediaPipe AR Setup
+        let poseLandmarker;
+        let webcamStream;
+        let video = document.getElementById('webcam');
+        let lastVideoTime = -1;
+
+        async function initAR() {
+            try {
+                document.getElementById('camera-container').style.display = 'block';
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
+                poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numPoses: 1
+                });
+                
+                webcamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                video.srcObject = webcamStream;
+                return new Promise(resolve => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve(true);
+                    };
+                });
+            } catch (e) {
+                console.error("Camera error:", e);
+                document.getElementById('camera-container').style.display = 'none';
+                return false;
+            }
+        }
+
+        function stopAR() {
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => track.stop());
+            }
+            document.getElementById('camera-container').style.display = 'none';
+        }
+
+        // STREAMING_CHUNK:Input Handling
+        function handleMouseMove(e) {
+            if(currentMode !== 'mouse') return;
+            targetX = e.clientX / window.innerWidth;
+        }
+        function handleTouchMove(e) {
+            if(currentMode !== 'mouse') return;
+            // e.preventDefault(); // ป้องกันเลื่อนหน้าจอ
+            targetX = e.touches[0].clientX / window.innerWidth;
+        }
+
+        function processAR() {
+            if (currentMode === 'ar' && poseLandmarker && video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                const results = poseLandmarker.detectForVideo(video, performance.now());
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const landmarks = results.landmarks[0];
+                    // ใช้ไหล่ซ้าย (11) และขวา (12) หรือจมูก (0)
+                    let cx;
+                    if(landmarks[11] && landmarks[12]) {
+                        cx = (landmarks[11].x + landmarks[12].x) / 2;
+                    } else {
+                        cx = landmarks[0].x;
+                    }
+                    // กล้องกลับด้าน (Mirror) ดังนั้น x ในจอภาพต้องกลับด้าน
+                    targetX = 1.0 - cx; 
+                }
+            }
+        }
+
+        // STREAMING_CHUNK:Game Loop and Logic
+        function gameLoop() {
+            if (gameState === "END") return;
+
+            processAR();
+
+            // Smooth Movement (Lerp)
+            playerX += (targetX - playerX) * SMOOTHING;
+            
+            // อัปเดต UI เส้นผู้เล่น
+            const lineLeft = (playerX * 100) + "%";
+            document.getElementById('player-line').style.left = lineLeft;
+
+            // ตรวจสอบโซน
+            let activeZone = null;
+            if (playerX < LEFT_THRESHOLD) activeZone = "left";
+            else if (playerX > RIGHT_THRESHOLD) activeZone = "right";
+            
+            // อัปเดตสีโซน
+            document.getElementById('zone-left').classList.toggle('active', activeZone === 'left');
+            document.getElementById('zone-right').classList.toggle('active', activeZone === 'right');
+
+            // --- State Machine ---
+            if (gameState === "WAIT_CENTER") {
+                if (playerX > CENTER_MIN && playerX < CENTER_MAX) {
+                    document.getElementById('center-prompt').style.display = 'none';
+                    showNextQuestion();
+                }
+            } 
+            else if (gameState === "PLAYING" || gameState === "DWELLING") {
+                if (activeZone) {
+                    if (currentZone !== activeZone) {
+                        // เพิ่งเข้าโซน
+                        currentZone = activeZone;
+                        dwellStartTime = Date.now();
+                        gameState = "DWELLING";
+                        document.getElementById('dwell-progress').style.display = 'block';
+                        playSound('select');
+                    } else {
+                        // อยู่ในโซนเดิม อัปเดต Progress
+                        let elapsed = Date.now() - dwellStartTime;
+                        let progress = Math.min((elapsed / DWELL_MS) * 100, 100);
+                        document.getElementById('dwell-fill').style.width = progress + "%";
+                        
+                        if (elapsed >= DWELL_MS) {
+                            // ยืนยันคำตอบ
+                            checkAnswer(activeZone);
+                        }
+                    }
+                } else {
+                    // ออกจากโซน
+                    currentZone = null;
+                    gameState = "PLAYING";
+                    document.getElementById('dwell-progress').style.display = 'none';
+                    document.getElementById('dwell-fill').style.width = "0%";
+                }
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // STREAMING_CHUNK:Question and Feedback
+        function showNextQuestion() {
+            if (currentQuestionIndex >= TOTAL_QUESTIONS) {
+                endGame();
+                return;
+            }
+            
+            currentItem = questionList[currentQuestionIndex];
+            document.getElementById('card-icon').innerText = currentItem.icon;
+            document.getElementById('card-word').innerText = currentItem.word;
+            document.getElementById('question-card').style.display = 'flex';
+            
+            gameState = "PLAYING";
+            currentZone = null;
+            document.getElementById('dwell-progress').style.display = 'none';
+            document.getElementById('dwell-fill').style.width = "0%";
+            updateHUD();
+        }
+
+        function checkAnswer(selectedZone) {
+            gameState = "FEEDBACK";
+            document.getElementById('dwell-progress').style.display = 'none';
+            document.getElementById('question-card').style.display = 'none';
+            
+            let isCorrect = (selectedZone === currentItem.zone);
+            const feedbackDisplay = document.getElementById('feedback-display');
+            const feedbackMain = document.getElementById('feedback-main');
+            const feedbackDesc = document.getElementById('feedback-desc');
+            
+            feedbackDisplay.style.display = 'block';
+            feedbackDesc.innerText = currentItem.desc;
+
+            if (isCorrect) {
+                playSound('correct');
+                score++;
+                feedbackMain.innerText = "🌟 ยอดเยี่ยม!";
+                feedbackMain.className = "feedback-correct";
+            } else {
+                playSound('incorrect');
+                feedbackMain.innerText = "❌ ลองใหม่นะ";
+                feedbackMain.className = "feedback-incorrect";
+            }
+
+            currentQuestionIndex++;
+            updateHUD();
+
+            // แสดง Feedback ค้างไว้ 2 วินาที แล้วกลับสู่หน้าจอรอตรงกลาง
+            setTimeout(() => {
+                feedbackDisplay.style.display = 'none';
+                if (currentQuestionIndex < TOTAL_QUESTIONS) {
+                    gameState = "WAIT_CENTER";
+                    document.getElementById('center-prompt').style.display = 'block';
+                } else {
+                    endGame();
+                }
+            }, 2000);
+        }
+
+        // STREAMING_CHUNK:HUD and Game End
+        function updateHUD() {
+            document.getElementById('hud-q').innerText = (Math.min(currentQuestionIndex + 1, TOTAL_QUESTIONS)) + "/" + TOTAL_QUESTIONS;
+            document.getElementById('hud-score').innerText = score;
+            let progressPct = (currentQuestionIndex / TOTAL_QUESTIONS) * 100;
+            document.getElementById('hud-progress').style.width = progressPct + "%";
+        }
+
+        function updateTimer() {
+            let elapsed = Math.floor((Date.now() - startTime) / 1000);
+            let m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+            let s = (elapsed % 60).toString().padStart(2, '0');
+            document.getElementById('hud-time').innerText = `${m}:${s}`;
+        }
+
+        function endGame() {
+            gameState = "END";
+            clearInterval(timerInterval);
+            if (currentMode === 'ar') stopAR();
+            if (currentMode === 'mouse') {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('touchmove', handleTouchMove);
+            }
+
+            document.getElementById('hud').style.display = 'none';
+            document.getElementById('game-area').style.display = 'none';
+            document.getElementById('player-line').style.display = 'none';
+            document.getElementById('center-prompt').style.display = 'none';
+            document.getElementById('question-card').style.display = 'none';
+            document.getElementById('dwell-progress').style.display = 'none';
+            document.getElementById('feedback-display').style.display = 'none';
+
+            let pct = (score / TOTAL_QUESTIONS) * 100;
+            let praise = "";
+            let mascot = "🐳";
+            if (pct >= 90) { praise = "ยอดเยี่ยมมาก! เก่งสุดๆ เลย!"; mascot = "👑🐳"; }
+            else if (pct >= 70) { praise = "ดีมาก! พยายามได้ดี!"; mascot = "🌟🐳"; }
+            else if (pct >= 50) { praise = "พยายามได้ดี! ฝึกอีกนิดนะ"; mascot = "💪🐳"; }
+            else { praise = "ไม่เป็นไรนะ ลองเล่นใหม่อีกครั้ง!"; mascot = "💖🐳"; }
+
+            document.getElementById('end-score').innerText = score + "/" + TOTAL_QUESTIONS;
+            document.getElementById('end-time').innerText = document.getElementById('hud-time').innerText;
+            document.getElementById('end-praise').innerText = praise;
+            document.getElementById('end-mascot').innerText = mascot;
+
+            document.getElementById('screen-end').classList.add('active');
+        }
+
+        function resetGame() {
+            document.getElementById('screen-end').classList.remove('active');
+            document.getElementById('screen-start').classList.add('active');
+            createBubbles();
+        }
+
+        // สร้างฟองสบู่เป็นพื้นหลังตอนเปิดหน้า
+        createBubbles();
+    </script>
+</body>
+</html>
+```eof
